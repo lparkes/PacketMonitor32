@@ -1,7 +1,3 @@
-/* uncomment if the default 4 bit mode doesn't work */
-/* ------------------------------------------------ */
-// #define BOARD_HAS_1BIT_SDMMC true // forces 1bit mode for SD MMC
-/* ------------------------------------------------ */
 
 #include "freertos/FreeRTOS.h"
 #include "esp_wifi.h"
@@ -21,12 +17,12 @@ using namespace std;
 #define MAX_CH 14       // 1 - 14 channels (1-11 for US, 1-13 for EU and 1-14 for Japan)
 #define SNAP_LEN 2324   // max len of each recieved packet
 
-#define BUTTON_PIN 5    // button to change the channel
+#define BUTTON_PIN 13    // button to change the channel
 
 #define USE_DISPLAY     // comment out if you don't want to use the OLED display
 #define FLIP_DISPLAY    // comment out if you don't like to flip it
-#define SDA_PIN 26
-#define SCL_PIN 27
+#define SDA_PIN 5
+#define SCL_PIN 4
 #define MAX_X 128
 #define MAX_Y 51
 
@@ -37,25 +33,19 @@ using namespace std;
 #endif
 
 #ifdef USE_DISPLAY
-#include "SH1106.h"
+#include "SSD1306.h"
 #endif
-
-#include "FS.h"
-#include "SD_MMC.h"
-#include "Buffer.h"
 
 esp_err_t event_handler(void* ctx, system_event_t* event) {
   return ESP_OK;
 }
 
 /* ===== run-time variables ===== */
-Buffer sdBuffer;
 #ifdef USE_DISPLAY
-SH1106 display(0x3c, SDA_PIN, SCL_PIN);
+SSD1306 display(0x3c, SDA_PIN, SCL_PIN);
 #endif
 Preferences preferences;
 
-bool useSD = false;
 bool buttonPressed = false;
 bool buttonEnabled = true;
 uint32_t lastDrawTime;
@@ -90,36 +80,6 @@ void setChannel(int newChannel) {
   esp_wifi_set_promiscuous(true);
 }
 
-bool setupSD() {
-  if (!SD_MMC.begin()) {
-    Serial.println("Card Mount Failed");
-    return false;
-  }
-
-  uint8_t cardType = SD_MMC.cardType();
-
-  if (cardType == CARD_NONE) {
-    Serial.println("No SD_MMC card attached");
-    return false;
-  }
-
-  Serial.print("SD_MMC Card Type: ");
-  if (cardType == CARD_MMC) {
-    Serial.println("MMC");
-  } else if (cardType == CARD_SD) {
-    Serial.println("SDSC");
-  } else if (cardType == CARD_SDHC) {
-    Serial.println("SDHC");
-  } else {
-    Serial.println("UNKNOWN");
-  }
-
-  uint64_t cardSize = SD_MMC.cardSize() / (1024 * 1024);
-  Serial.printf("SD_MMC Card Size: %lluMB\n", cardSize);
-
-  return true;
-}
-
 void wifi_promiscuous(void* buf, wifi_promiscuous_pkt_type_t type) {
   wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
   wifi_pkt_rx_ctrl_t ctrl = (wifi_pkt_rx_ctrl_t)pkt->rx_ctrl;
@@ -135,8 +95,6 @@ void wifi_promiscuous(void* buf, wifi_promiscuous_pkt_type_t type) {
   //Serial.print(".");
   tmpPacketCounter++;
   rssiSum += ctrl.rssi;
-
-  if (useSD) sdBuffer.addPacket(pkt->payload, packetLength);
 }
 
 void draw() {
@@ -160,7 +118,6 @@ void draw() {
   display.drawString(106, 0, (String)deauths);
   display.drawString(110, 0, ("]"));
   display.drawString(114, 0, ("|"));
-  display.drawString(128, 0, (useSD ? "SD" : ""));
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.drawString( 36,  0, ("Pkts:"));
 
@@ -197,12 +154,6 @@ void setup() {
   ESP_ERROR_CHECK(esp_wifi_start());
 
   esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-
-  // SD card
-  sdBuffer = Buffer();
-
-  if (setupSD())
-    sdBuffer.open(&SD_MMC);
 
   // I/O
   pinMode(BUTTON_PIN, INPUT_PULLUP);
@@ -261,18 +212,6 @@ void coreTask( void * p ) {
         if (!buttonPressed) {
           buttonPressed = true;
           lastButtonTime = currentTime;
-        } else if (currentTime - lastButtonTime >= 2000) {
-          if (useSD) {
-            useSD = false;
-            sdBuffer.close(&SD_MMC);
-            draw();
-          } else {
-            if (setupSD())
-              sdBuffer.open(&SD_MMC);
-            draw();
-          }
-          buttonPressed = false;
-          buttonEnabled = false;
         }
       }
     } else {
@@ -284,9 +223,6 @@ void coreTask( void * p ) {
       buttonEnabled = true;
     }
 
-    // save buffer to SD
-    if (useSD)
-      sdBuffer.save(&SD_MMC);
 
     // draw Display
     if ( currentTime - lastDrawTime > 1000 ) {
